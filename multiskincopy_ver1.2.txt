@@ -1,0 +1,420 @@
+# -*- coding: utf-8 -*-
+
+from PySide2 import QtWidgets, QtCore, QtGui
+import maya.cmds as cmds
+import maya.mel as mel
+
+# グローバル変数としてツールのインスタンスを保持し、複数起動を防ぐ
+weight_copy_tool_instance = None
+
+class WeightCopyTool(QtWidgets.QDialog):
+    """
+    Mayaで複数のオブジェクト間でスキニングウェイトをコピーするためのGUIツール
+    ユーザーが明示的にコピー元とコピー先のペアを設定し、順番にウェイトをコピーします。
+    既存のスキンクラスタをデタッチする処理は行いません。
+    """
+    def __init__(self, parent=None):
+        super(WeightCopyTool, self).__init__(parent)
+        self.setWindowTitle("複数ウェイトコピーツール (ペア指定)")
+        self.setGeometry(100, 100, 550, 700) # ウィンドウの初期サイズと位置を調整
+
+        self.stocked_objects = [] # ストックされたオブジェクトのリスト
+
+        self.create_widgets()
+        self.create_layout()
+        self.create_connections()
+
+        # ウィンドウを常にMayaの前面に表示するためのフラグ
+        self.setWindowFlags(self.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+
+    def create_widgets(self):
+        """
+        ツールのUIウィジェットを作成します。
+        """
+        # オブジェクトストックセクション
+        self.stock_button = QtWidgets.QPushButton("選択したオブジェクトをストック")
+        self.stock_list_widget = QtWidgets.QListWidget()
+        self.stock_list_widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection) # 複数選択を許可
+        self.remove_from_stock_button = QtWidgets.QPushButton("ストックから削除 (選択したアイテム)") # 新しいボタン
+
+        # ペア設定テーブルセクション
+        self.pairs_table_widget = QtWidgets.QTableWidget()
+        self.pairs_table_widget.setColumnCount(3)
+        self.pairs_table_widget.setHorizontalHeaderLabels(["コピー元 (Source)", "コピー先 (Target)", "ステータス (Status)"])
+        self.pairs_table_widget.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch) # Sourceカラムを伸縮
+        self.pairs_table_widget.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch) # Targetカラムを伸縮
+        self.pairs_table_widget.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents) # Statusカラムは内容に合わせる
+        self.pairs_table_widget.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows) # 行全体を選択
+        self.pairs_table_widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection) # 複数行選択を許可
+
+        # テーブル操作ボタン
+        self.add_source_to_table_button = QtWidgets.QPushButton("選択をソースカラムに追加")
+        self.add_target_to_table_button = QtWidgets.QPushButton("選択をターゲットカラムに追加")
+        self.add_empty_row_button = QtWidgets.QPushButton("空のペア行を追加")
+        self.remove_selected_rows_button = QtWidgets.QPushButton("選択した行を削除")
+        self.clear_all_pairs_button = QtWidgets.QPushButton("全ペアをクリア")
+
+        # ウェイトコピー実行セクション
+        self.copy_button = QtWidgets.QPushButton("ウェイトコピーを実行")
+        self.copy_button.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 10px; border-radius: 5px;")
+
+        # メッセージ表示ラベル
+        self.message_label = QtWidgets.QLabel("準備完了")
+        self.message_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.message_label.setStyleSheet("color: blue; font-size: 12px; padding: 5px;")
+
+    def create_layout(self):
+        """
+        ツールのレイアウトを作成し、ウィジェットを配置します。
+        """
+        main_layout = QtWidgets.QVBoxLayout(self)
+
+        # オブジェクトストックグループボックス
+        stock_group = QtWidgets.QGroupBox("1. オブジェクトのストック")
+        stock_layout = QtWidgets.QVBoxLayout()
+        stock_layout.addWidget(self.stock_button)
+        stock_layout.addWidget(self.remove_from_stock_button) # 新しいボタンを追加
+        stock_layout.addWidget(self.stock_list_widget)
+        stock_group.setLayout(stock_layout)
+        main_layout.addWidget(stock_group)
+
+        # ペア設定グループボックス
+        pairs_group = QtWidgets.QGroupBox("2. コピー元 / コピー先のペア設定")
+        pairs_layout = QtWidgets.QVBoxLayout()
+        
+        # テーブル操作ボタンのレイアウト
+        table_buttons_layout = QtWidgets.QHBoxLayout()
+        table_buttons_layout.addWidget(self.add_source_to_table_button)
+        table_buttons_layout.addWidget(self.add_target_to_table_button)
+        table_buttons_layout.addWidget(self.add_empty_row_button)
+        table_buttons_layout.addWidget(self.remove_selected_rows_button)
+        table_buttons_layout.addWidget(self.clear_all_pairs_button)
+        pairs_layout.addLayout(table_buttons_layout)
+
+        pairs_layout.addWidget(self.pairs_table_widget)
+        pairs_group.setLayout(pairs_layout)
+        main_layout.addWidget(pairs_group)
+
+        # ウェイトコピー実行セクション
+        main_layout.addWidget(self.copy_button)
+        main_layout.addSpacing(10)
+        main_layout.addWidget(self.message_label)
+
+        main_layout.addStretch(1)
+
+    def create_connections(self):
+        """
+        ウィジェットのシグナルとスロットを接続します。
+        """
+        self.stock_button.clicked.connect(self.stock_selected_objects)
+        self.remove_from_stock_button.clicked.connect(self.remove_selected_from_stock) # 新しい接続
+        self.add_source_to_table_button.clicked.connect(self.add_selected_to_source_column)
+        self.add_target_to_table_button.clicked.connect(self.add_selected_to_target_column)
+        self.add_empty_row_button.clicked.connect(self.add_empty_pair_row)
+        self.remove_selected_rows_button.clicked.connect(self.remove_selected_pair_rows)
+        self.clear_all_pairs_button.clicked.connect(self.clear_all_pair_rows)
+        self.copy_button.clicked.connect(self.perform_weight_copy)
+
+    def update_message(self, message, style="blue"):
+        """
+        メッセージラベルを更新します。
+        :param message: 表示するメッセージ文字列
+        :param style: メッセージの色（'blue', 'red', 'green', 'orange'など）
+        """
+        self.message_label.setText(message)
+        self.message_label.setStyleSheet(f"color: {style}; font-size: 12px; padding: 5px;")
+        QtWidgets.QApplication.processEvents()
+
+    def stock_selected_objects(self):
+        """
+        Mayaで現在選択されているオブジェクトをストックリストに追加します。
+        選択されたオブジェクトがグループの場合、その中のジオメトリを抽出します。
+        """
+        selected = cmds.ls(selection=True, long=True)
+
+        if not selected:
+            self.update_message("エラー: オブジェクトが選択されていません。", "red")
+            return
+
+        geometries_to_add = []
+        skipped_items = []
+
+        for obj in selected:
+            obj_type = cmds.nodeType(obj)
+            
+            if obj_type == 'transform':
+                # transformノードの場合、その子孫からジオメトリシェイプを探す
+                shapes = cmds.listRelatives(obj, allDescendents=True, fullPath=True, type=['mesh', 'nurbsSurface', 'subdiv'])
+                if shapes:
+                    for shape in shapes:
+                        # シェイプの親のトランスフォームノードを取得
+                        parent_transform = cmds.listRelatives(shape, parent=True, fullPath=True)
+                        if parent_transform and parent_transform[0] not in geometries_to_add:
+                            geometries_to_add.append(parent_transform[0])
+                else:
+                    # 子にジオメトリシェイプがないtransformノード（空のグループなど）はスキップ
+                    skipped_items.append(obj)
+            elif obj_type in ['mesh', 'nurbsSurface', 'subdiv']:
+                # ジオメトリシェイプが直接選択された場合、その親のトランスフォームノードを追加
+                parent_transform = cmds.listRelatives(obj, parent=True, fullPath=True)
+                if parent_transform and parent_transform[0] not in geometries_to_add:
+                    geometries_to_add.append(parent_transform[0])
+            else:
+                # その他のタイプのノード（カメラ、ライトなど）はスキップ
+                skipped_items.append(obj)
+
+        added_count = 0
+        for geo_obj in geometries_to_add:
+            if geo_obj not in self.stocked_objects:
+                self.stocked_objects.append(geo_obj)
+                self.stock_list_widget.addItem(geo_obj)
+                added_count += 1
+        
+        message = ""
+        if added_count > 0:
+            message += f"{added_count} 個のジオメトリをストックしました。"
+        
+        if skipped_items:
+            if message: message += " "
+            message += f"({len(skipped_items)} 個のグループ/非ジオメトリオブジェクトはスキップされました。)"
+        
+        if not message:
+            message = "選択されたオブジェクトは既にストックされているか、ストック可能なジオメトリではありませんでした。"
+            self.update_message(message, "orange")
+        else:
+            self.update_message(message, "blue")
+
+    def remove_selected_from_stock(self):
+        """
+        ストックリストで選択されたオブジェクトをリストから削除します。
+        """
+        selected_items = self.stock_list_widget.selectedItems()
+        if not selected_items:
+            self.update_message("エラー: ストックリストから削除するオブジェクトを選択してください。", "red")
+            return
+
+        removed_count = 0
+        # 削除は逆順に行うとインデックスがずれない
+        for item in reversed(selected_items):
+            obj_to_remove = item.text()
+            if obj_to_remove in self.stocked_objects:
+                self.stocked_objects.remove(obj_to_remove)
+                self.stock_list_widget.takeItem(self.stock_list_widget.row(item)) # UIから削除
+                removed_count += 1
+        
+        if removed_count > 0:
+            self.update_message(f"{removed_count} 個のオブジェクトをストックから削除しました。", "blue")
+        else:
+            self.update_message("選択されたオブジェクトはストックリストに見つかりませんでした。", "orange")
+
+
+    def add_empty_pair_row(self):
+        """
+        ペア設定テーブルに空の行を追加します。
+        """
+        row_position = self.pairs_table_widget.rowCount()
+        self.pairs_table_widget.insertRow(row_position)
+        self.pairs_table_widget.setItem(row_position, 2, QtWidgets.QTableWidgetItem("準備完了")) # ステータス初期値
+        self.update_message("空のペア行を追加しました。", "blue")
+
+    def add_selected_to_source_column(self):
+        """
+        ストックリストで選択されたオブジェクトを、テーブルの新しい行のソースカラムに追加します。
+        """
+        selected_items = self.stock_list_widget.selectedItems()
+        if not selected_items:
+            self.update_message("エラー: ストックリストからソースオブジェクトを選択してください。", "red")
+            return
+        
+        for item in selected_items:
+            obj_name = item.text()
+            row_position = self.pairs_table_widget.rowCount()
+            self.pairs_table_widget.insertRow(row_position)
+            self.pairs_table_widget.setItem(row_position, 0, QtWidgets.QTableWidgetItem(obj_name))
+            self.pairs_table_widget.setItem(row_position, 2, QtWidgets.QTableWidgetItem("準備完了")) # ステータス初期値
+        
+        self.update_message(f"{len(selected_items)} 個のオブジェクトをソースカラムに追加しました。", "blue")
+
+    def add_selected_to_target_column(self):
+        """
+        ストックリストで選択されたオブジェクトを、テーブルで選択されている行のターゲットカラムに追加します。
+        テーブルで選択されている行がない場合、新しい行を作成して追加します。
+        """
+        selected_stock_items = self.stock_list_widget.selectedItems()
+        if not selected_stock_items:
+            self.update_message("エラー: ストックリストからターゲットオブジェクトを選択してください。", "red")
+            return
+
+        selected_table_rows_indices = sorted(list(set([item.row() for item in self.pairs_table_widget.selectedItems()])))
+        
+        start_row_index = 0
+        if selected_table_rows_indices:
+            start_row_index = selected_table_rows_indices[0]
+        else:
+            # テーブルに行が選択されていない場合、現在の行数から開始
+            start_row_index = self.pairs_table_widget.rowCount()
+
+        added_count = 0
+        for i, stock_item in enumerate(selected_stock_items):
+            target_obj_name = stock_item.text()
+            current_row_index = start_row_index + i
+
+            # 必要な場合、新しい行を挿入
+            if current_row_index >= self.pairs_table_widget.rowCount():
+                self.pairs_table_widget.insertRow(current_row_index)
+                # 新しい行の場合、ソースカラムも空で初期化
+                self.pairs_table_widget.setItem(current_row_index, 0, QtWidgets.QTableWidgetItem("")) 
+
+            # コピー元とコピー先が同じオブジェクトでないかチェック
+            source_item = self.pairs_table_widget.item(current_row_index, 0)
+            if source_item and source_item.text() == target_obj_name:
+                self.update_message(f"警告: 行 {current_row_index + 1}: コピー元とコピー先は同じオブジェクトに設定できません ('{target_obj_name}')。スキップしました。", "orange")
+                continue
+
+            self.pairs_table_widget.setItem(current_row_index, 1, QtWidgets.QTableWidgetItem(target_obj_name))
+            self.pairs_table_widget.setItem(current_row_index, 2, QtWidgets.QTableWidgetItem("準備完了")) # ステータスをリセット
+            added_count += 1
+        
+        if added_count > 0:
+            self.update_message(f"{added_count} 個のオブジェクトをターゲットカラムに追加しました。", "blue")
+        else:
+            self.update_message("ターゲットオブジェクトは追加されませんでした。", "orange")
+
+
+    def remove_selected_pair_rows(self):
+        """
+        テーブルで選択されている行を削除します。
+        """
+        selected_rows = sorted(list(set([item.row() for item in self.pairs_table_widget.selectedItems()])), reverse=True)
+        if not selected_rows:
+            self.update_message("エラー: 削除する行をテーブルから選択してください。", "red")
+            return
+        
+        for row_index in selected_rows:
+            self.pairs_table_widget.removeRow(row_index)
+        
+        self.update_message(f"{len(selected_rows)} 個のペア行を削除しました。", "blue")
+
+    def clear_all_pair_rows(self):
+        """
+        テーブルのすべてのペア行をクリアします。
+        """
+        self.pairs_table_widget.setRowCount(0)
+        self.update_message("すべてのペア行をクリアしました。", "blue")
+
+    def perform_weight_copy(self):
+        """
+        テーブルに設定されたペアに基づいてウェイトコピーを実行します。
+        既存のスキンクラスタをデタッチする処理は行いません。
+        """
+        if self.pairs_table_widget.rowCount() == 0:
+            self.update_message("エラー: コピーするペアがテーブルに設定されていません。", "red")
+            return
+
+        self.update_message("ウェイトコピーを実行中...", "orange")
+        
+        successful_copies_count = 0
+        
+        for row_index in range(self.pairs_table_widget.rowCount()):
+            source_item = self.pairs_table_widget.item(row_index, 0)
+            target_item = self.pairs_table_widget.item(row_index, 1)
+            
+            source_full_path = source_item.text() if source_item else ""
+            target_full_path = target_item.text() if target_item else ""
+
+            # ステータスをリセット
+            self.pairs_table_widget.setItem(row_index, 2, QtWidgets.QTableWidgetItem("処理中..."))
+            self.pairs_table_widget.item(row_index, 2).setForeground(QtGui.QColor("black")) # 色をリセット
+            QtWidgets.QApplication.processEvents()
+
+            if not source_full_path:
+                status_message = "エラー: コピー元が設定されていません。"
+                self.pairs_table_widget.setItem(row_index, 2, QtWidgets.QTableWidgetItem(status_message))
+                self.pairs_table_widget.item(row_index, 2).setForeground(QtGui.QColor("red"))
+                continue
+            if not target_full_path:
+                status_message = "エラー: コピー先が設定されていません。"
+                self.pairs_table_widget.setItem(row_index, 2, QtWidgets.QTableWidgetItem(status_message))
+                self.pairs_table_widget.item(row_index, 2).setForeground(QtGui.QColor("red"))
+                continue
+
+            try:
+                # オブジェクトの存在チェック
+                if not cmds.objExists(source_full_path):
+                    status_message = f"エラー: コピー元 '{source_full_path}' がシーンに存在しません。"
+                    self.pairs_table_widget.setItem(row_index, 2, QtWidgets.QTableWidgetItem(status_message))
+                    self.pairs_table_widget.item(row_index, 2).setForeground(QtGui.QColor("red"))
+                    continue
+                if not cmds.objExists(target_full_path):
+                    status_message = f"エラー: コピー先 '{target_full_path}' がシーンに存在しません。"
+                    self.pairs_table_widget.setItem(row_index, 2, QtWidgets.QTableWidgetItem(status_message))
+                    self.pairs_table_widget.item(row_index, 2).setForeground(QtGui.QColor("red"))
+                    continue
+
+                # コピー元オブジェクトがスキニングされているか確認
+                source_skin_cluster = mel.eval(f'findRelatedSkinCluster("{source_full_path}")')
+                if not source_skin_cluster:
+                    status_message = f"エラー: コピー元 '{source_full_path}' にスキニング情報がありません。"
+                    self.pairs_table_widget.setItem(row_index, 2, QtWidgets.QTableWidgetItem(status_message))
+                    self.pairs_table_widget.item(row_index, 2).setForeground(QtGui.QColor("red"))
+                    continue
+
+                # ここで既存のスキンクラスタをデタッチする処理は行いません。
+                # copySkinWeightsは、既存のスキンクラスタが存在する場合、
+                # そのウェイトを上書きするか、新しいスキンクラスタを作成するかは
+                # そのコマンドのデフォルト挙動または追加のフラグに依存します。
+                # 通常、既存のスキンクラスタがあればそのウェイトを更新します。
+
+                # ウェイトコピーを実行
+                cmds.copySkinWeights(source_full_path, target_full_path,
+                                     noMirror=True,
+                                     surfaceAssociation='closestPoint',
+                                     influenceAssociation='closestJoint', 
+                                     normalize=True) 
+                
+                status_message = "成功"
+                self.pairs_table_widget.setItem(row_index, 2, QtWidgets.QTableWidgetItem(status_message))
+                self.pairs_table_widget.item(row_index, 2).setForeground(QtGui.QColor("green"))
+                successful_copies_count += 1
+
+            except Exception as e:
+                status_message = f"エラー: {e}"
+                self.pairs_table_widget.setItem(row_index, 2, QtWidgets.QTableWidgetItem(status_message))
+                self.pairs_table_widget.item(row_index, 2).setForeground(QtGui.QColor("red"))
+                cmds.error(f"Weight Copy Tool Error for pair ({source_full_path} -> {target_full_path}): {e}")
+            
+            QtWidgets.QApplication.processEvents() # 各ペアの処理後にUIを更新
+
+        if successful_copies_count > 0:
+            self.update_message(f"ウェイトコピーが完了しました。成功: {successful_copies_count} 件。", "green")
+        else:
+            self.update_message("ウェイトコピーは実行されませんでした。すべてのペアでエラーが発生した可能性があります。", "red")
+
+def show_weight_copy_tool():
+    """
+    ウェイトコピーツールウィンドウを表示します。
+    既に開いている場合は、既存のウィンドウを閉じ、新しいインスタンスを作成します。
+    """
+    global weight_copy_tool_instance
+
+    if weight_copy_tool_instance:
+        try:
+            weight_copy_tool_instance.close()
+            weight_copy_tool_instance.deleteLater()
+        except RuntimeError:
+            pass
+    
+    # Mayaのメインウィンドウを明示的に親として設定
+    # これにより、スクリプトエディタを閉じてもウィンドウが閉じなくなります。
+    maya_main_window = None
+    for widget in QtWidgets.QApplication.topLevelWidgets():
+        if "MayaWindow" in widget.objectName():
+            maya_main_window = widget
+            break
+    
+    weight_copy_tool_instance = WeightCopyTool(maya_main_window)
+    weight_copy_tool_instance.show()
+
+if __name__ == "__main__":
+    show_weight_copy_tool()
+
