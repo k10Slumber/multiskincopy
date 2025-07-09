@@ -24,8 +24,12 @@ class WeightCopyTool(QtWidgets.QDialog):
         self.create_layout()
         self.create_connections()
 
-        # ウィンドウを常にMayaの前面に表示するためのフラグ
-        self.setWindowFlags(self.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+        # ウィンドウのフラグを変更:
+        # QtCore.Qt.WindowStaysOnTopHint を削除し、QtCore.Qt.Tool を追加します。
+        # これにより、ツールウィンドウはMayaのメインウィンドウの上に表示されますが、
+        # タスクバーには表示されず、Mayaの他のUI要素を邪魔しにくくなります。
+        # Mayaのメインウィンドウを最小化すると、このツールウィンドウも一緒に最小化されます。
+        self.setWindowFlags(self.windowFlags() | QtCore.Qt.Tool) 
 
     def create_widgets(self):
         """
@@ -53,6 +57,18 @@ class WeightCopyTool(QtWidgets.QDialog):
         self.add_empty_row_button = QtWidgets.QPushButton("空のペア行を追加")
         self.remove_selected_rows_button = QtWidgets.QPushButton("選択した行を削除")
         self.clear_all_pairs_button = QtWidgets.QPushButton("全ペアをクリア")
+
+        # オプションセクション
+        # チェックボックスのテキストを変更
+        self.enable_name_diff_warning_checkbox = QtWidgets.QCheckBox("命名パターンの乖離を検出する") 
+        self.enable_name_diff_warning_checkbox.setChecked(True) # デフォルトでオン
+
+        # ラベルのテキストを変更
+        self.name_diff_label = QtWidgets.QLabel("Difference:") 
+        self.name_diff_spinbox = QtWidgets.QSpinBox() 
+        self.name_diff_spinbox.setMinimum(0)
+        self.name_diff_spinbox.setMaximum(100) # 適当な最大値
+        self.name_diff_spinbox.setValue(3) # デフォルト値
 
         # ウェイトコピー実行セクション
         self.copy_button = QtWidgets.QPushButton("ウェイトコピーを実行")
@@ -95,6 +111,20 @@ class WeightCopyTool(QtWidgets.QDialog):
         pairs_group.setLayout(pairs_layout)
         main_layout.addWidget(pairs_group)
 
+        # オプショングループボックス
+        options_group = QtWidgets.QGroupBox("3. オプション")
+        options_layout = QtWidgets.QVBoxLayout()
+        options_layout.addWidget(self.enable_name_diff_warning_checkbox) # チェックボックスを追加
+        
+        name_diff_layout = QtWidgets.QHBoxLayout() # 許容値用のレイアウト
+        name_diff_layout.addWidget(self.name_diff_label)
+        name_diff_layout.addWidget(self.name_diff_spinbox)
+        name_diff_layout.addStretch(1) # 右寄せ
+        options_layout.addLayout(name_diff_layout)
+
+        options_group.setLayout(options_layout)
+        main_layout.addWidget(options_group)
+
         # ウェイトコピー実行セクション
         main_layout.addWidget(self.copy_button)
         main_layout.addSpacing(10)
@@ -107,7 +137,7 @@ class WeightCopyTool(QtWidgets.QDialog):
         ウィジェットのシグナルとスロットを接続します。
         """
         self.stock_button.clicked.connect(self.stock_selected_objects)
-        self.remove_from_stock_button.clicked.connect(self.remove_selected_from_stock) # 新しい接続
+        self.remove_from_stock_button.clicked.connect(self.remove_selected_from_stock)
         self.add_source_to_table_button.clicked.connect(self.add_selected_to_source_column)
         self.add_target_to_table_button.clicked.connect(self.add_selected_to_target_column)
         self.add_empty_row_button.clicked.connect(self.add_empty_pair_row)
@@ -302,6 +332,29 @@ class WeightCopyTool(QtWidgets.QDialog):
         self.pairs_table_widget.setRowCount(0)
         self.update_message("すべてのペア行をクリアしました。", "blue")
 
+    def _calculate_name_difference(self, name1, name2):
+        """
+        2つのオブジェクト名の文字の差異を計算します。
+        これはLevenshtein距離ではありませんが、不一致文字数と長さの差を合計します。
+        """
+        # フルパスからショートネームを抽出
+        short_name1 = name1.split('|')[-1]
+        short_name2 = name2.split('|')[-1]
+
+        len1 = len(short_name1)
+        len2 = len(short_name2)
+        mismatches = 0
+        
+        # 共通部分の不一致をカウント
+        for i in range(min(len1, len2)):
+            if short_name1[i] != short_name2[i]:
+                mismatches += 1
+                
+        # 長さの差を加算
+        mismatches += abs(len1 - len2)
+        
+        return mismatches
+
     def perform_weight_copy(self):
         """
         テーブルに設定されたペアに基づいてウェイトコピーを実行します。
@@ -359,6 +412,33 @@ class WeightCopyTool(QtWidgets.QDialog):
                     self.pairs_table_widget.item(row_index, 2).setForeground(QtGui.QColor("red"))
                     continue
 
+                # 名前差異警告チェック
+                if self.enable_name_diff_warning_checkbox.isChecked():
+                    name_diff_threshold = self.name_diff_spinbox.value()
+                    name_diff = self._calculate_name_difference(source_full_path, target_full_path)
+                    if name_diff >= name_diff_threshold:
+                        msg_box = QtWidgets.QMessageBox(self)
+                        msg_box.setWindowTitle("命名パターン警告") # タイトルも変更
+                        msg_box.setText(
+                            f"命名パターンに乖離が見られます。\n\n" # 表現を変更
+                            f"コピー元: '{source_full_path.split('|')[-1]}'\n"
+                            f"コピー先: '{target_full_path.split('|')[-1]}'\n"
+                            f"乖離: {name_diff} 文字 (許容値: {name_diff_threshold} 文字)\n\n"
+                            f"ウェイトコピーを続行しますか？"
+                        )
+                        msg_box.setIcon(QtWidgets.QMessageBox.Warning)
+                        msg_box.setStandardButtons(QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+                        msg_box.setButtonText(QtWidgets.QMessageBox.Yes, "続行")
+                        msg_box.setButtonText(QtWidgets.QMessageBox.No, "スキップ")
+                        
+                        ret = msg_box.exec_()
+                        
+                        if ret == QtWidgets.QMessageBox.No:
+                            status_message = "スキップされました (命名パターン乖離警告)。"
+                            self.pairs_table_widget.setItem(row_index, 2, QtWidgets.QTableWidgetItem(status_message))
+                            self.pairs_table_widget.item(row_index, 2).setForeground(QtGui.QColor("orange"))
+                            continue # このペアの処理をスキップして次のループへ
+
                 # ここで既存のスキンクラスタをデタッチする処理は行いません。
                 # copySkinWeightsは、既存のスキンクラスタが存在する場合、
                 # そのウェイトを上書きするか、新しいスキンクラスタを作成するかは
@@ -413,8 +493,13 @@ def show_weight_copy_tool():
             break
     
     weight_copy_tool_instance = WeightCopyTool(maya_main_window)
+    # WindowStaysOnTopHint の代わりに QtCore.Qt.Tool を使用
+    # これにより、Mayaの他のUI要素を邪魔しにくく、Mayaの最小化に追従するようになります。
+    weight_copy_tool_instance.setWindowFlags(weight_copy_tool_instance.windowFlags() | QtCore.Qt.Tool)
     weight_copy_tool_instance.show()
 
 if __name__ == "__main__":
     show_weight_copy_tool()
+
+
 
