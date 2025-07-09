@@ -8,7 +8,7 @@
 
 ※グループを選択してその中のジオメトリを一括で取得することもできます！
 
-https://x.com/IKSlumber/status/1942945395690385623←動画
+https://x.com/IKSlumber/status/1942945395690385623　　　←動画
 
 
 
