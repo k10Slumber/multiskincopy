@@ -29,7 +29,7 @@ class WeightCopyTool(QtWidgets.QDialog):
         # これにより、ツールウィンドウはMayaのメインウィンドウの上に表示されますが、
         # タスクバーには表示されず、Mayaの他のUI要素を邪魔しにくくなります。
         # Mayaのメインウィンドウを最小化すると、このツールウィンドウも一緒に最小化されます。
-        self.setWindowFlags(self.windowFlags() | QtCore.Qt.Tool) 
+        self.setWindowFlags(self.windowFlags() | QtCore.Qt.Tool)
 
     def create_widgets(self):
         """
@@ -39,7 +39,8 @@ class WeightCopyTool(QtWidgets.QDialog):
         self.stock_button = QtWidgets.QPushButton("選択したオブジェクトをストック")
         self.stock_list_widget = QtWidgets.QListWidget()
         self.stock_list_widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection) # 複数選択を許可
-        self.remove_from_stock_button = QtWidgets.QPushButton("ストックから削除 (選択したアイテム)") # 新しいボタン
+        self.remove_from_stock_button = QtWidgets.QPushButton("ストックから削除 (選択したアイテム)")
+        self.clear_all_stock_button = QtWidgets.QPushButton("ストックをすべてクリア") # 新しいボタン
 
         # ペア設定テーブルセクション
         self.pairs_table_widget = QtWidgets.QTableWidget()
@@ -60,12 +61,12 @@ class WeightCopyTool(QtWidgets.QDialog):
 
         # オプションセクション
         # チェックボックスのテキストを変更
-        self.enable_name_diff_warning_checkbox = QtWidgets.QCheckBox("命名パターンの乖離を検出する") 
+        self.enable_name_diff_warning_checkbox = QtWidgets.QCheckBox("命名パターンの乖離を検出する")
         self.enable_name_diff_warning_checkbox.setChecked(True) # デフォルトでオン
 
         # ラベルのテキストを変更
-        self.name_diff_label = QtWidgets.QLabel("Difference:") 
-        self.name_diff_spinbox = QtWidgets.QSpinBox() 
+        self.name_diff_label = QtWidgets.QLabel("Difference:")
+        self.name_diff_spinbox = QtWidgets.QSpinBox()
         self.name_diff_spinbox.setMinimum(0)
         self.name_diff_spinbox.setMaximum(100) # 適当な最大値
         self.name_diff_spinbox.setValue(3) # デフォルト値
@@ -89,7 +90,8 @@ class WeightCopyTool(QtWidgets.QDialog):
         stock_group = QtWidgets.QGroupBox("1. オブジェクトのストック")
         stock_layout = QtWidgets.QVBoxLayout()
         stock_layout.addWidget(self.stock_button)
-        stock_layout.addWidget(self.remove_from_stock_button) # 新しいボタンを追加
+        stock_layout.addWidget(self.remove_from_stock_button)
+        stock_layout.addWidget(self.clear_all_stock_button) # 新しいボタンを追加
         stock_layout.addWidget(self.stock_list_widget)
         stock_group.setLayout(stock_layout)
         main_layout.addWidget(stock_group)
@@ -97,7 +99,7 @@ class WeightCopyTool(QtWidgets.QDialog):
         # ペア設定グループボックス
         pairs_group = QtWidgets.QGroupBox("2. コピー元 / コピー先のペア設定")
         pairs_layout = QtWidgets.QVBoxLayout()
-        
+
         # テーブル操作ボタンのレイアウト
         table_buttons_layout = QtWidgets.QHBoxLayout()
         table_buttons_layout.addWidget(self.add_source_to_table_button)
@@ -114,8 +116,8 @@ class WeightCopyTool(QtWidgets.QDialog):
         # オプショングループボックス
         options_group = QtWidgets.QGroupBox("3. オプション")
         options_layout = QtWidgets.QVBoxLayout()
-        options_layout.addWidget(self.enable_name_diff_warning_checkbox) # チェックボックスを追加
-        
+        options_layout.addWidget(self.enable_name_diff_warning_checkbox)
+
         name_diff_layout = QtWidgets.QHBoxLayout() # 許容値用のレイアウト
         name_diff_layout.addWidget(self.name_diff_label)
         name_diff_layout.addWidget(self.name_diff_spinbox)
@@ -138,6 +140,7 @@ class WeightCopyTool(QtWidgets.QDialog):
         """
         self.stock_button.clicked.connect(self.stock_selected_objects)
         self.remove_from_stock_button.clicked.connect(self.remove_selected_from_stock)
+        self.clear_all_stock_button.clicked.connect(self.clear_all_stocked_objects) # 新しい接続
         self.add_source_to_table_button.clicked.connect(self.add_selected_to_source_column)
         self.add_target_to_table_button.clicked.connect(self.add_selected_to_target_column)
         self.add_empty_row_button.clicked.connect(self.add_empty_pair_row)
@@ -171,7 +174,7 @@ class WeightCopyTool(QtWidgets.QDialog):
 
         for obj in selected:
             obj_type = cmds.nodeType(obj)
-            
+
             if obj_type == 'transform':
                 # transformノードの場合、その子孫からジオメトリシェイプを探す
                 shapes = cmds.listRelatives(obj, allDescendents=True, fullPath=True, type=['mesh', 'nurbsSurface', 'subdiv'])
@@ -199,15 +202,15 @@ class WeightCopyTool(QtWidgets.QDialog):
                 self.stocked_objects.append(geo_obj)
                 self.stock_list_widget.addItem(geo_obj)
                 added_count += 1
-        
+
         message = ""
         if added_count > 0:
             message += f"{added_count} 個のジオメトリをストックしました。"
-        
+
         if skipped_items:
             if message: message += " "
             message += f"({len(skipped_items)} 個のグループ/非ジオメトリオブジェクトはスキップされました。)"
-        
+
         if not message:
             message = "選択されたオブジェクトは既にストックされているか、ストック可能なジオメトリではありませんでした。"
             self.update_message(message, "orange")
@@ -231,12 +234,23 @@ class WeightCopyTool(QtWidgets.QDialog):
                 self.stocked_objects.remove(obj_to_remove)
                 self.stock_list_widget.takeItem(self.stock_list_widget.row(item)) # UIから削除
                 removed_count += 1
-        
+
         if removed_count > 0:
             self.update_message(f"{removed_count} 個のオブジェクトをストックから削除しました。", "blue")
         else:
             self.update_message("選択されたオブジェクトはストックリストに見つかりませんでした。", "orange")
 
+    def clear_all_stocked_objects(self):
+        """
+        ストックリストのすべてのオブジェクトをクリアします。
+        """
+        if not self.stocked_objects:
+            self.update_message("ストックリストは既に空です。", "orange")
+            return
+
+        self.stocked_objects = []
+        self.stock_list_widget.clear()
+        self.update_message("すべてのストックオブジェクトをクリアしました。", "blue")
 
     def add_empty_pair_row(self):
         """
@@ -255,14 +269,14 @@ class WeightCopyTool(QtWidgets.QDialog):
         if not selected_items:
             self.update_message("エラー: ストックリストからソースオブジェクトを選択してください。", "red")
             return
-        
+
         for item in selected_items:
             obj_name = item.text()
             row_position = self.pairs_table_widget.rowCount()
             self.pairs_table_widget.insertRow(row_position)
             self.pairs_table_widget.setItem(row_position, 0, QtWidgets.QTableWidgetItem(obj_name))
             self.pairs_table_widget.setItem(row_position, 2, QtWidgets.QTableWidgetItem("準備完了")) # ステータス初期値
-        
+
         self.update_message(f"{len(selected_items)} 個のオブジェクトをソースカラムに追加しました。", "blue")
 
     def add_selected_to_target_column(self):
@@ -276,7 +290,7 @@ class WeightCopyTool(QtWidgets.QDialog):
             return
 
         selected_table_rows_indices = sorted(list(set([item.row() for item in self.pairs_table_widget.selectedItems()])))
-        
+
         start_row_index = 0
         if selected_table_rows_indices:
             start_row_index = selected_table_rows_indices[0]
@@ -293,7 +307,7 @@ class WeightCopyTool(QtWidgets.QDialog):
             if current_row_index >= self.pairs_table_widget.rowCount():
                 self.pairs_table_widget.insertRow(current_row_index)
                 # 新しい行の場合、ソースカラムも空で初期化
-                self.pairs_table_widget.setItem(current_row_index, 0, QtWidgets.QTableWidgetItem("")) 
+                self.pairs_table_widget.setItem(current_row_index, 0, QtWidgets.QTableWidgetItem(""))
 
             # コピー元とコピー先が同じオブジェクトでないかチェック
             source_item = self.pairs_table_widget.item(current_row_index, 0)
@@ -304,12 +318,11 @@ class WeightCopyTool(QtWidgets.QDialog):
             self.pairs_table_widget.setItem(current_row_index, 1, QtWidgets.QTableWidgetItem(target_obj_name))
             self.pairs_table_widget.setItem(current_row_index, 2, QtWidgets.QTableWidgetItem("準備完了")) # ステータスをリセット
             added_count += 1
-        
+
         if added_count > 0:
             self.update_message(f"{added_count} 個のオブジェクトをターゲットカラムに追加しました。", "blue")
         else:
             self.update_message("ターゲットオブジェクトは追加されませんでした。", "orange")
-
 
     def remove_selected_pair_rows(self):
         """
@@ -319,10 +332,10 @@ class WeightCopyTool(QtWidgets.QDialog):
         if not selected_rows:
             self.update_message("エラー: 削除する行をテーブルから選択してください。", "red")
             return
-        
+
         for row_index in selected_rows:
             self.pairs_table_widget.removeRow(row_index)
-        
+
         self.update_message(f"{len(selected_rows)} 個のペア行を削除しました。", "blue")
 
     def clear_all_pair_rows(self):
@@ -344,15 +357,15 @@ class WeightCopyTool(QtWidgets.QDialog):
         len1 = len(short_name1)
         len2 = len(short_name2)
         mismatches = 0
-        
+
         # 共通部分の不一致をカウント
         for i in range(min(len1, len2)):
             if short_name1[i] != short_name2[i]:
                 mismatches += 1
-                
+
         # 長さの差を加算
         mismatches += abs(len1 - len2)
-        
+
         return mismatches
 
     def perform_weight_copy(self):
@@ -365,13 +378,13 @@ class WeightCopyTool(QtWidgets.QDialog):
             return
 
         self.update_message("ウェイトコピーを実行中...", "orange")
-        
+
         successful_copies_count = 0
-        
+
         for row_index in range(self.pairs_table_widget.rowCount()):
             source_item = self.pairs_table_widget.item(row_index, 0)
             target_item = self.pairs_table_widget.item(row_index, 1)
-            
+
             source_full_path = source_item.text() if source_item else ""
             target_full_path = target_item.text() if target_item else ""
 
@@ -430,9 +443,9 @@ class WeightCopyTool(QtWidgets.QDialog):
                         msg_box.setStandardButtons(QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
                         msg_box.setButtonText(QtWidgets.QMessageBox.Yes, "続行")
                         msg_box.setButtonText(QtWidgets.QMessageBox.No, "スキップ")
-                        
+
                         ret = msg_box.exec_()
-                        
+
                         if ret == QtWidgets.QMessageBox.No:
                             status_message = "スキップされました (命名パターン乖離警告)。"
                             self.pairs_table_widget.setItem(row_index, 2, QtWidgets.QTableWidgetItem(status_message))
@@ -447,11 +460,11 @@ class WeightCopyTool(QtWidgets.QDialog):
 
                 # ウェイトコピーを実行
                 cmds.copySkinWeights(source_full_path, target_full_path,
-                                     noMirror=True,
-                                     surfaceAssociation='closestPoint',
-                                     influenceAssociation='closestJoint', 
-                                     normalize=True) 
-                
+                                    noMirror=True,
+                                    surfaceAssociation='closestPoint',
+                                    influenceAssociation='closestJoint',
+                                    normalize=True)
+
                 status_message = "成功"
                 self.pairs_table_widget.setItem(row_index, 2, QtWidgets.QTableWidgetItem(status_message))
                 self.pairs_table_widget.item(row_index, 2).setForeground(QtGui.QColor("green"))
@@ -462,7 +475,7 @@ class WeightCopyTool(QtWidgets.QDialog):
                 self.pairs_table_widget.setItem(row_index, 2, QtWidgets.QTableWidgetItem(status_message))
                 self.pairs_table_widget.item(row_index, 2).setForeground(QtGui.QColor("red"))
                 cmds.error(f"Weight Copy Tool Error for pair ({source_full_path} -> {target_full_path}): {e}")
-            
+
             QtWidgets.QApplication.processEvents() # 各ペアの処理後にUIを更新
 
         if successful_copies_count > 0:
@@ -483,7 +496,7 @@ def show_weight_copy_tool():
             weight_copy_tool_instance.deleteLater()
         except RuntimeError:
             pass
-    
+
     # Mayaのメインウィンドウを明示的に親として設定
     # これにより、スクリプトエディタを閉じてもウィンドウが閉じなくなります。
     maya_main_window = None
@@ -491,7 +504,7 @@ def show_weight_copy_tool():
         if "MayaWindow" in widget.objectName():
             maya_main_window = widget
             break
-    
+
     weight_copy_tool_instance = WeightCopyTool(maya_main_window)
     # WindowStaysOnTopHint の代わりに QtCore.Qt.Tool を使用
     # これにより、Mayaの他のUI要素を邪魔しにくく、Mayaの最小化に追従するようになります。
@@ -500,6 +513,5 @@ def show_weight_copy_tool():
 
 if __name__ == "__main__":
     show_weight_copy_tool()
-
 
 
